@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pedidos a proveedores</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    background: #eef2f9;
+    color: #1e293b;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  input:focus { outline: 2px solid #6366f1; outline-offset: 1px; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+  button { transition: transform .12s ease, box-shadow .12s ease; }
+  button:active:not(:disabled) { transform: scale(0.93); }
+  @keyframes pop {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  .pop-anim { animation: pop .32s ease; }
+
+  @media (max-width: 640px) {
+    body { font-size: 15px; }
+    .header-title { font-size: 20px !important; }
+    .tab-bar { gap: 6px !important; }
+    .tab-label { font-size: 11px !important; }
+    .mf-card { flex-direction: column !important; align-items: stretch !important; }
+    .mf-actions-row { justify-content: space-between !important; width: 100% !important; margin-top: 10px; }
+    .order-bottom-bar { flex-direction: column !important; align-items: stretch !important; gap: 8px !important; }
+    .order-bottom-actions { display: flex !important; flex-direction: column !important; gap: 8px !important; }
+    .order-bottom-actions button { width: 100% !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ======================================================= -->
+<!-- CONFIGURACIÓN                                            -->
+<!-- ======================================================= -->
+<script>
+  window.APP_CONFIG = {
+    APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycby-f2ibSUh2wsYKbddsGnwJY2OTDIraz6bfNNf39Cl5DmKmGqIcFJUVmjachQ4ZP-lo/exec"
+  };
+</script>
+<!-- ======================================================= -->
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+const CFG = window.APP_CONFIG;
+
+const PALETTE = ["#6366f1", "#0ea5e9", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316"];
+function colorFor(key) {
+  let hash = 0;
+  const s = String(key || "x");
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return PALETTE[hash % PALETTE.length];
+}
+
+function newId() {
+  return "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+}
+function nowIso() { return new Date().toISOString(); }
+
+function emptyOrder(numero, proveedor) {
+  return {
+    id: newId(), numero: numero || "", proveedor: proveedor || "",
+    estado: "borrador", items: {}, createdAt: nowIso(), updatedAt: nowIso(),
+  };
+}
+
+async function apiGet(action) {
+  const res = await fetch(`${CFG.APPS_SCRIPT_URL}?action=${action}`);
+  if (!res.ok) throw new Error("No se pudo conectar con el servidor.");
+  return res.json();
+}
+async function apiPost(body) {
+  const res = await fetch(CFG.APPS_SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Respuesta inesperada del servidor: " + text.slice(0, 200));
+  }
+  if (!res.ok) throw new Error("No se pudo guardar.");
+  if (data && data.ok === false) throw new Error(data.error || "Error del servidor");
+  return data;
+}
+
+function displayName(row) {
+  return row.d || row.b || row.a || "(sin nombre)";
+}
+function displayCode(row) {
+  return row.c || row.a || "—";
+}
+function formatCosto(val) {
+  const n = parseFloat(val);
+  if (isNaN(n)) return "";
+  return "$ " + n.toLocaleString("es-AR", { maximumFractionDigits: 2 });
+}
+function proveedorLabel(code, proveedores) {
+  const name = proveedores && proveedores[String(code)];
+  return name ? `${code} - ${name}` : String(code || "—");
+}
+
+function App() {
+  const [tab, setTab] = useState("marcar"); // marcar | compras | sugerencias
+  const [view, setView] = useState("dashboard"); // dashboard | order (dentro de compras)
+  const [catalog, setCatalog] = useState(null);
+  const [proveedores, setProveedores] = useState({});
+  const [sugerencias, setSugerencias] = useState([]);
+  const [faltantes, setFaltantes] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [currentOrder, setCurrentOrder] = useState(null);
+  const [filters, setFilters] = useState({ producto: "", codigo: "", fabrica: "", proveedor: "" });
+  const [qtyDraft, setQtyDraft] = useState({});
+  const [stockDraft, setStockDraft] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [configError, setConfigError] = useState(false);
+
+  function showToast(msg, duration) {
+    setToast(msg);
+    setTimeout(() => setToast(null), duration || 2600);
+  }
+
+  useEffect(() => {
+    if (CFG.APPS_SCRIPT_URL.includes("PEGAR_")) {
+      setConfigError(true);
+      setLoading(false);
+      return;
+    }
+    refreshAll();
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "compras" || view === "order") return;
+    const interval = setInterval(() => {
+      refreshFaltantes();
+      refreshOrders();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [tab, view]);
+
+  async function refreshAll() {
+    setLoading(true);
+    try {
+      const [cat, falts, ords, provs, sugs] = await Promise.all([
+        apiGet("catalog"), apiGet("faltantes"), apiGet("orders"), apiGet("proveedores"), apiGet("sugerencias")
+      ]);
+      setCatalog(cat);
+      setFaltantes(falts);
+      setOrders(ords.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)));
+      setProveedores(provs || {});
+      setSugerencias(sugs || []);
+    } catch (e) {
+      showToast(e.message || "Error al cargar datos");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshSugerencias() {
+    try { setSugerencias(await apiGet("sugerencias")); } catch (e) { showToast(e.message); }
+  }
+
+  async function refreshFaltantes() {
+    try { setFaltantes(await apiGet("faltantes")); } catch (e) { showToast(e.message); }
+  }
+  async function refreshOrders() {
+    try {
+      const ords = await apiGet("orders");
+      setOrders(ords.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)));
+    } catch (e) { showToast(e.message); }
+  }
+
+  const filteredRows = useMemo(() => {
+    if (!catalog) return [];
+    const sorted = [...catalog.rows].sort((x, y) => displayName(x).localeCompare(displayName(y), "es"));
+    const fp = filters.producto.trim().toLowerCase();
+    const fc = filters.codigo.trim().toLowerCase();
+    const ff = filters.fabrica.trim().toLowerCase();
+    const fv = filters.proveedor.trim().toLowerCase();
+    if (!fp && !fc && !ff && !fv) return sorted.slice(0, 200);
+    const provName = (r) => (proveedores[String(r.aa)] || "").toLowerCase();
+    let results = sorted.filter((r) => {
+      if (fp) {
+        const matchesName = displayName(r).toLowerCase().includes(fp);
+        const matchesProveedor = provName(r).includes(fp);
+        if (!matchesName && !matchesProveedor) return false;
+      }
+      if (fc && (r.a || "").toLowerCase() !== fc) return false;
+      if (ff && (r.c || "").toLowerCase() !== ff) return false;
+      if (fv) {
+        const code = (r.aa || "").toLowerCase();
+        const name = provName(r);
+        if (code !== fv && !name.includes(fv)) return false;
+      }
+      return true;
+    });
+    if (fp) {
+      const priority = (r) => {
+        const name = displayName(r).toLowerCase();
+        if (name.startsWith(fp)) return 0;
+        if (name.split(/\s+/).some((w) => w.startsWith(fp))) return 1;
+        if (name.includes(fp)) return 2;
+        return 3; // solo coincide por nombre de proveedor
+      };
+      results = results
+        .map((r) => ({ r, p: priority(r) }))
+        .sort((x, y) => x.p - y.p)
+        .map((x) => x.r);
+    }
+    return results;
+  }, [catalog, filters, proveedores]);
+
+  function markFaltante(row) {
+    const qty = qtyDraft[row._rowId] || 1;
+    apiPost({
+      action: "addFaltante",
+      item: {
+        id: newId(), codigo: row.a, nrofabrica: row.c || "", nombre: displayName(row),
+        proveedor: row.aa || "", costo: row.e || "",
+        descB: row.descB || "", descS: row.descS || "", descT: row.descT || "", descU: row.descU || "",
+        costoSinIva: row.costoSinIva || "", stockActual: stockDraft[row._rowId] ?? "",
+        cantidad: qty, createdAt: nowIso()
+      },
+    }).catch((e) => showToast("No se pudo guardar: " + e.message));
+    showToast(`Agregado a faltantes: ${displayName(row)} (${qty})`);
+    setQtyDraft((prev) => ({ ...prev, [row._rowId]: 1 }));
+    setStockDraft((prev) => ({ ...prev, [row._rowId]: "" }));
+  }
+
+  function setStock(rowId, val) {
+    setStockDraft((prev) => ({ ...prev, [rowId]: val }));
+  }
+
+  function setQty(rowId, qty) {
+    setQtyDraft((prev) => ({ ...prev, [rowId]: Math.max(1, qty) }));
+  }
+
+  const faltantesByProveedor = useMemo(() => {
+    const groups = {};
+    faltantes.forEach((f) => {
+      const key = f.proveedor || "(sin proveedor)";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(f);
+    });
+    return groups;
+  }, [faltantes]);
+
+  async function addSugerencia(texto, imagenBase64, link) {
+    setBusy(true);
+    try {
+      await apiPost({ action: "addSugerencia", item: { id: newId(), texto, imagenBase64, link, createdAt: nowIso() } });
+      showToast("Sugerencia guardada");
+      await refreshSugerencias();
+    } catch (e) {
+      if (imagenBase64) {
+        try {
+          await apiPost({ action: "addSugerencia", item: { id: newId(), texto, link, createdAt: nowIso() } });
+          showToast(`Se guardó el texto. La imagen falló: ${e.message}`, 9000);
+          await refreshSugerencias();
+        } catch (e2) {
+          showToast("No se pudo guardar: " + e2.message);
+        }
+      } else {
+        showToast("No se pudo guardar: " + e.message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateSugerencia(id, texto, link, imagenBase64, removeImage) {
+    setBusy(true);
+    try {
+      await apiPost({ action: "updateSugerencia", item: { id, texto, link, imagenBase64, removeImage } });
+      showToast("Sugerencia actualizada");
+      await refreshSugerencias();
+    } catch (e) {
+      showToast("No se pudo actualizar: " + e.message, 9000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteSugerencia(id) {
+    setBusy(true);
+    try {
+      await apiPost({ action: "deleteSugerencia", id });
+      showToast("Sugerencia eliminada");
+      await refreshSugerencias();
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteFaltante(id) {
+    setBusy(true);
+    try {
+      await apiPost({ action: "removeFaltantes", ids: [id] });
+      await refreshFaltantes();
+      showToast("Eliminado de faltantes");
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generarPedido(proveedor, items, numero) {
+    setBusy(true);
+    try {
+      const itemsObj = {};
+      items.forEach((it) => {
+        itemsObj[it.id] = {
+          a: it.codigo, c: it.nrofabrica || "", d: it.nombre, e: it.costo || "",
+          descB: it.descB || "", descS: it.descS || "", descT: it.descT || "", descU: it.descU || "",
+          costoSinIva: it.costoSinIva || "", stockActual: it.stockActual || "",
+          cantidad: it.cantidad
+        };
+      });
+      const order = emptyOrder(numero, proveedor);
+      order.items = itemsObj;
+      await apiPost({ action: "saveOrder", order });
+      await apiPost({ action: "removeFaltantes", ids: items.map((it) => it.id) });
+      showToast(`Pedido ${numero} generado para proveedor ${proveedor}`);
+      await Promise.all([refreshFaltantes(), refreshOrders()]);
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openOrder(order) {
+    setCurrentOrder(JSON.parse(JSON.stringify(order)));
+    setView("order");
+  }
+
+  async function deleteOrder(order) {
+    setBusy(true);
+    try {
+      await apiPost({ action: "deleteOrder", id: order.id });
+      showToast("Pedido eliminado");
+      setCurrentOrder(null);
+      setView("dashboard");
+      await refreshOrders();
+    } catch (e) {
+      showToast("No se pudo eliminar: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function persistOrder(order, opts = {}) {
+    const toSave = { ...order, updatedAt: nowIso() };
+    if (opts.finalize) toSave.estado = "completado";
+    setBusy(true);
+    try {
+      await apiPost({ action: "saveOrder", order: toSave });
+      setCurrentOrder(toSave);
+      await refreshOrders();
+    } catch (e) {
+      showToast("No se pudo guardar: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+    return toSave;
+  }
+
+  function addItemToCurrentOrder(row) {
+    setCurrentOrder((prev) => {
+      const items = { ...prev.items };
+      const key = String(row._rowId || row.a);
+      if (items[key]) items[key] = { ...items[key], cantidad: items[key].cantidad + 1 };
+      else items[key] = {
+        a: row.a, c: row.c || "", d: displayName(row), e: row.e || "",
+        descB: row.descB || "", descS: row.descS || "", descT: row.descT || "", descU: row.descU || "",
+        costoSinIva: row.costoSinIva || "", cantidad: 1
+      };
+      return { ...prev, items };
+    });
+  }
+  function changeQty(key, delta) {
+    setCurrentOrder((prev) => {
+      const items = { ...prev.items };
+      const it = items[key];
+      if (!it) return prev;
+      const q = it.cantidad + delta;
+      if (q <= 0) delete items[key]; else items[key] = { ...it, cantidad: q };
+      return { ...prev, items };
+    });
+  }
+  function removeItem(key) {
+    setCurrentOrder((prev) => {
+      const items = { ...prev.items };
+      delete items[key];
+      return { ...prev, items };
+    });
+  }
+
+  if (configError) {
+    return (
+      <Centered>
+        <Card style={{ maxWidth: 420, borderTop: "4px solid #f59e0b" }}>
+          <div style={{ fontWeight: 700, color: "#b45309", marginBottom: 8 }}>Falta completar la configuración</div>
+          <div style={{ fontSize: 14 }}>Editá el archivo .html y completá <code className="mono">APPS_SCRIPT_URL</code>.</div>
+        </Card>
+      </Centered>
+    );
+  }
+  if (loading) {
+    return <Centered><div className="mono" style={{ color: "#94a3b8" }}>cargando…</div></Centered>;
+  }
+
+  return (
+    <div style={{ minHeight: "100vh" }}>
+      {toast && (
+        <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, maxWidth: "90vw" }}>
+          <div style={{ background: "#1e293b", color: "white", fontSize: 14, padding: "10px 18px", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.25)", wordBreak: "break-word" }}>
+            {toast}
+          </div>
+        </div>
+      )}
+
+      <div className="header-band" style={{ background: "linear-gradient(135deg,#4f46e5,#0ea5e9)", padding: "22px 20px 60px" }}>
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          <div style={{ color: "rgba(255,255,255,.75)", fontSize: 12, fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>PEDIDOS A PROVEEDORES</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <h1 className="header-title" style={{ color: "white", margin: 0, fontSize: 26, fontWeight: 800 }}>
+              {view === "order" ? "Detalle del pedido" : tab === "marcar" ? "Marcar faltante" : tab === "compras" ? "Panel de compras" : "Sugerencias de clientes"}
+            </h1>
+            <button onClick={refreshAll} disabled={busy} style={pillBtn("rgba(255,255,255,.18)", "white")}>↻ actualizar</button>
+          </div>
+          <div className="tab-bar" style={{ display: "flex", gap: 8, marginTop: 18 }}>
+            <TabButton active={view !== "order" && tab === "marcar"} onClick={() => { setTab("marcar"); setView("dashboard"); }} emoji="📋" label="Marcar faltante" />
+            <TabButton active={view !== "order" && tab === "compras"} onClick={() => { setTab("compras"); setView("dashboard"); }} emoji="🛒" label="Panel de compras" />
+            <TabButton active={view !== "order" && tab === "sugerencias"} onClick={() => { setTab("sugerencias"); setView("dashboard"); }} emoji="💡" label="Sugerencias" />
+            {currentOrder && <TabButton active={view === "order"} onClick={() => setView("order")} emoji="🧾" label={`Pedido ${currentOrder.numero || ""}`} />}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 900, margin: "-40px auto 0", padding: "0 12px 40px" }}>
+        {view === "order" ? (
+          <OrderScreen
+            order={currentOrder} setOrder={setCurrentOrder} catalog={catalog} proveedores={proveedores}
+            onBack={() => { setView("dashboard"); }}
+            onAdd={addItemToCurrentOrder} onQty={changeQty} onRemove={removeItem}
+            onSave={() => persistOrder(currentOrder).then(() => showToast("Guardado"))}
+            onSaveExit={() => persistOrder(currentOrder).then(() => { showToast("Guardado"); setView("dashboard"); })}
+            onFinalize={() => persistOrder(currentOrder, { finalize: true }).then(() => { showToast("Pedido finalizado"); setView("dashboard"); })}
+            onDelete={() => deleteOrder(currentOrder)}
+            busy={busy}
+          />
+        ) : tab === "marcar" ? (
+          <MarcarFaltante
+            catalog={catalog} filters={filters} setFilters={setFilters} proveedores={proveedores}
+            filteredRows={filteredRows} qtyDraft={qtyDraft} setQty={setQty}
+            stockDraft={stockDraft} setStock={setStock}
+            onMark={markFaltante} busy={busy}
+          />
+        ) : tab === "compras" ? (
+          <PanelCompras
+            faltantesByProveedor={faltantesByProveedor} orders={orders} proveedores={proveedores}
+            onGenerar={generarPedido} onOpenOrder={openOrder} busy={busy}
+            onDeleteFaltante={deleteFaltante}
+          />
+        ) : (
+          <Sugerencias sugerencias={sugerencias} onAdd={addSugerencia} onUpdate={updateSugerencia} onDelete={deleteSugerencia} busy={busy} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Centered({ children }) {
+  return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#eef2f9" }}>{children}</div>;
+}
+function Card({ children, style }) {
+  return <div style={{ background: "white", borderRadius: 14, boxShadow: "0 1px 3px rgba(0,0,0,.08)", padding: 18, ...style }}>{children}</div>;
+}
+function pillBtn(bg, color) {
+  return { background: bg, color, border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" };
+}
+function TabButton({ active, onClick, emoji, label }) {
+  return (
+    <button onClick={onClick} style={{
+      flex: 1, padding: "10px 8px", borderRadius: 10, border: "none", cursor: "pointer",
+      background: active ? "white" : "rgba(255,255,255,.15)",
+      color: active ? "#4f46e5" : "white", fontWeight: 700, fontSize: 14,
+      display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+      transition: "all .15s", minWidth: 0,
+    }}>
+      <span style={{ fontSize: 16 }}>{emoji}</span><span className="tab-label" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+    </button>
+  );
+}
+
+function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, setQty, stockDraft, setStock, onMark, busy, proveedores }) {
+  const [popId, setPopId] = useState(null);
+  if (!catalog) return <Card>No se pudo cargar el catálogo.</Card>;
+
+  function setF(key, val) { setFilters((prev) => ({ ...prev, [key]: val })); }
+  function handleMark(row) {
+    setPopId(row._rowId);
+    setTimeout(() => setPopId(null), 340);
+    onMark(row);
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16, padding: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+          <input value={filters.producto} onChange={(e) => setF("producto", e.target.value)}
+            placeholder="🔍 Producto" style={searchInputStyle} />
+          <input value={filters.codigo} onChange={(e) => setF("codigo", e.target.value)}
+            placeholder="Código" className="mono" style={searchInputStyle} />
+          <input value={filters.fabrica} onChange={(e) => setF("fabrica", e.target.value)}
+            placeholder="N° de fábrica" className="mono" style={searchInputStyle} />
+          <input value={filters.proveedor} onChange={(e) => setF("proveedor", e.target.value)}
+            placeholder="Proveedor" className="mono" style={searchInputStyle} />
+        </div>
+      </Card>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {filteredRows.length === 0 && <Card style={{ textAlign: "center", color: "#94a3b8" }}>Sin resultados</Card>}
+        {filteredRows.map((row) => {
+          const qty = qtyDraft[row._rowId] || 1;
+          const accent = colorFor(row.aa);
+          return (
+            <Card key={row._rowId} className="mf-card" style={{ borderLeft: `5px solid ${accent}`, display: "flex", alignItems: "center", gap: 14, padding: 14 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{displayName(row)}</div>
+                <div className="mono" style={{ fontSize: 12, color: "#94a3b8" }}>
+                  código {row.a || "—"} · N° fábrica {row.c || "—"}{row.e ? ` · costo ${formatCosto(row.e)}` : ""}
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                  desc. {[row.descB, row.descS, row.descT, row.descU].filter((v) => v).join(" / ") || "—"}
+                </div>
+                <div style={{ marginTop: 3, display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span style={{ fontSize: 17, fontWeight: 800, color: "#0f172a" }}>{formatCosto(row.costoSinIva) || "—"}</span>
+                  <span style={{ fontSize: 11, color: "#94a3b8" }}>costo sin IVA</span>
+                </div>
+                {row.aa && <div style={{ fontSize: 12, color: accent, fontWeight: 700, marginTop: 2 }}>● proveedor {proveedorLabel(row.aa, proveedores)}</div>}
+              </div>
+              <div className="mf-actions-row" style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                  <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>STOCK ACTUAL</label>
+                  <input type="number" min="0" value={stockDraft[row._rowId] ?? ""} placeholder="0"
+                    onChange={(e) => setStock(row._rowId, e.target.value)}
+                    style={{ width: 60, border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 4px", fontSize: 13, textAlign: "center" }} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                  <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>A PEDIR</label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button onClick={() => setQty(row._rowId, qty - 1)} style={stepperBtn}>−</button>
+                    <span className="mono" style={{ width: 26, textAlign: "center", fontWeight: 700 }}>{qty}</span>
+                    <button onClick={() => setQty(row._rowId, qty + 1)} style={stepperBtn}>+</button>
+                  </div>
+                </div>
+                <button onClick={() => handleMark(row)} disabled={busy}
+                  className={popId === row._rowId ? "pop-anim" : ""}
+                  style={{
+                    background: "#f59e0b", color: "white", border: "none", borderRadius: 10,
+                    padding: "10px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap"
+                  }}>
+                  ⚠ Marcar faltante
+                </button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+const searchInputStyle = { border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", fontSize: 14, width: "100%" };
+const stepperBtn = { width: 30, height: 30, borderRadius: 8, border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", fontSize: 16, fontWeight: 700, color: "#475569" };
+
+function nextConsecutiveNumero(orders) {
+  let max = 0;
+  orders.forEach((o) => {
+    const n = parseInt(String(o.numero).replace(/\D/g, ""), 10);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return String(max + 1);
+}
+
+function resizeImageDataUrl(dataUrl, maxWidth, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+async function compressImageFile(file) {
+  const reader = new FileReader();
+  const rawDataUrl = await new Promise((resolve, reject) => {
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  // Achica progresivamente hasta que quede liviana (máx ~180.000 caracteres, ≈130KB)
+  const attempts = [
+    { maxWidth: 700, quality: 0.7 },
+    { maxWidth: 500, quality: 0.6 },
+    { maxWidth: 350, quality: 0.5 },
+    { maxWidth: 220, quality: 0.4 },
+  ];
+  let result = await resizeImageDataUrl(rawDataUrl, attempts[0].maxWidth, attempts[0].quality);
+  for (let i = 1; i < attempts.length && result.length > 180000; i++) {
+    result = await resizeImageDataUrl(rawDataUrl, attempts[i].maxWidth, attempts[i].quality);
+  }
+  return result;
+}
+
+function Sugerencias({ sugerencias, onAdd, onUpdate, onDelete, busy }) {
+  const [texto, setTexto] = useState("");
+  const [link, setLink] = useState("");
+  const [imagen, setImagen] = useState(null); // dataURL nuevo, o URL existente si estamos editando
+  const [imagenChanged, setImagenChanged] = useState(false); // true = hay que subir/quitar imagen
+  const [editingId, setEditingId] = useState(null);
+  const fileInputRef = useRef(null);
+
+  async function handleFiles(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    try {
+      const dataUrl = await compressImageFile(file);
+      setImagen(dataUrl);
+      setImagenChanged(true);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function handlePaste(e) {
+    const items = e.clipboardData?.items || [];
+    for (const item of items) {
+      if (item.type && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        handleFiles(file);
+        e.preventDefault();
+        return;
+      }
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFiles(file);
+  }
+
+  function handleRemoveImage(e) {
+    e.stopPropagation();
+    setImagen(null);
+    setImagenChanged(true);
+  }
+
+  function resetForm() {
+    setTexto(""); setLink(""); setImagen(null); setImagenChanged(false); setEditingId(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handleEditar(s) {
+    setEditingId(s.id);
+    setTexto(s.texto || "");
+    setLink(s.link || "");
+    setImagen(s.imagenUrl || null);
+    setImagenChanged(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function handleGuardar() {
+    if (!texto.trim() && !imagen && !link.trim()) return;
+    if (editingId) {
+      onUpdate(
+        editingId, texto.trim(), link.trim(),
+        imagenChanged && imagen ? imagen : undefined,
+        imagenChanged && !imagen
+      );
+    } else {
+      onAdd(texto.trim(), imagen, link.trim());
+    }
+    resetForm();
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 20, border: editingId ? "2px solid #6366f1" : undefined }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 800, fontSize: 13, color: "#475569" }}>
+            {editingId ? "✏️ EDITANDO SUGERENCIA" : "+ NUEVA SUGERENCIA DE CLIENTE"}
+          </div>
+          {editingId && (
+            <button onClick={resetForm} style={{ border: "none", background: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+              Cancelar edición ✕
+            </button>
+          )}
+        </div>
+        <textarea
+          value={texto} onChange={(e) => setTexto(e.target.value)}
+          placeholder="¿Qué producto pidió el cliente? Describilo acá…"
+          rows={3}
+          style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit", resize: "vertical" }}
+        />
+        <input
+          value={link} onChange={(e) => setLink(e.target.value)}
+          placeholder="🔗 Link del producto (pegá la URL de internet)"
+          style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", fontSize: 14, marginBottom: 10 }}
+        />
+        <div
+          onPaste={handlePaste}
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+          tabIndex={0}
+          style={{
+            border: "2px dashed #cbd5e1", borderRadius: 10, padding: 16, textAlign: "center",
+            color: "#94a3b8", fontSize: 13, background: "#f8fafc"
+          }}
+        >
+          {imagen ? (
+            <div style={{ position: "relative", display: "inline-block" }}>
+              <img src={imagen} alt="preview" style={{ maxHeight: 140, borderRadius: 8 }} />
+              <button
+                onClick={handleRemoveImage}
+                style={{ position: "absolute", top: -8, right: -8, background: "#f43f5e", color: "white", border: "none", borderRadius: "50%", width: 24, height: 24, cursor: "pointer" }}
+              >✕</button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ marginBottom: 10 }}>📋 Hacé click acá y pegá la imagen (Ctrl+V), o arrastrala directo</div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                style={{ background: "white", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, color: "#475569", cursor: "pointer" }}
+              >
+                📁 Subir desde la PC
+              </button>
+            </div>
+          )}
+        </div>
+        <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }}
+          onChange={(e) => handleFiles(e.target.files?.[0])} />
+        <button onClick={handleGuardar} disabled={busy || (!texto.trim() && !imagen && !link.trim())}
+          style={{
+            marginTop: 12, background: editingId ? "#10b981" : "#6366f1", color: "white", border: "none", borderRadius: 10,
+            padding: "10px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer",
+            opacity: (!texto.trim() && !imagen && !link.trim()) ? 0.5 : 1
+          }}>
+          {editingId ? "✓ Guardar cambios" : "💡 Guardar sugerencia"}
+        </button>
+      </Card>
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#475569", letterSpacing: 0.5, marginBottom: 10 }}>
+        SUGERENCIAS GUARDADAS ({sugerencias.length})
+      </div>
+      {sugerencias.length === 0 && (
+        <Card style={{ textAlign: "center", color: "#94a3b8" }}>Todavía no hay sugerencias cargadas.</Card>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
+        {sugerencias.map((s) => (
+          <Card key={s.id} style={{ padding: 0, overflow: "hidden" }}>
+            {s.imagenUrl && (
+              <img src={s.imagenUrl} alt="" style={{ width: "100%", height: 150, objectFit: "cover" }}
+                onError={(e) => { e.target.style.display = "none"; }} />
+            )}
+            <div style={{ padding: 12 }}>
+              <div style={{ fontSize: 13, color: "#1e293b", whiteSpace: "pre-wrap" }}>{s.texto || "(sin descripción)"}</div>
+              {s.link && (
+                <a href={s.link} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: 12, color: "#6366f1", fontWeight: 600, display: "inline-block", marginTop: 6 }}>
+                  🔗 Ver producto
+                </a>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>{new Date(s.createdAt).toLocaleDateString("es-AR")}</span>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => handleEditar(s)} style={{ border: "none", background: "none", color: "#6366f1", cursor: "pointer", fontSize: 14 }}>✏️</button>
+                  <button onClick={() => onDelete(s.id)} style={{ border: "none", background: "none", color: "#f43f5e", cursor: "pointer", fontSize: 15 }}>🗑️</button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, onDeleteFaltante, busy, proveedores: proveedoresMap }) {
+  const proveedores = Object.keys(faltantesByProveedor).sort((a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+  const borradores = orders.filter((o) => o.estado === "borrador");
+  const completados = orders.filter((o) => o.estado === "completado");
+  const nextNumero = nextConsecutiveNumero(orders);
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#475569", letterSpacing: 0.5, marginBottom: 10 }}>
+        🧾 FALTANTES PENDIENTES POR PROVEEDOR
+      </div>
+      {proveedores.length === 0 && (
+        <Card style={{ textAlign: "center", color: "#94a3b8", marginBottom: 24 }}>No hay faltantes pendientes. 🎉</Card>
+      )}
+      <div style={{ display: "flex", gap: 14, marginBottom: 28, overflowX: "auto", paddingBottom: 12 }}>
+        {proveedores.map((prov) => (
+          <div key={prov} style={{ flex: "0 0 300px", width: 300 }}>
+            <ProveedorGroup
+              proveedor={prov} items={faltantesByProveedor[prov]}
+              onGenerar={onGenerar} onDelete={onDeleteFaltante} busy={busy}
+              nextNumero={nextNumero} proveedores={proveedoresMap}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#475569", letterSpacing: 0.5, marginBottom: 10 }}>
+        📦 PEDIDOS GENERADOS
+      </div>
+      {borradores.length === 0 && completados.length === 0 && (
+        <Card style={{ textAlign: "center", color: "#94a3b8" }}>Todavía no hay pedidos generados.</Card>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {borradores.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} proveedores={proveedoresMap} />)}
+        {completados.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} done proveedores={proveedoresMap} />)}
+      </div>
+    </div>
+  );
+}
+
+function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumero, proveedores }) {
+  const [checked, setChecked] = useState(() => Object.fromEntries(items.map((it) => [it.id, true])));
+  const [qtys, setQtys] = useState(() => Object.fromEntries(items.map((it) => [it.id, it.cantidad])));
+  const [stocks, setStocks] = useState(() => Object.fromEntries(items.map((it) => [it.id, it.stockActual ?? ""])));
+  const [numero, setNumero] = useState(nextNumero || "");
+  const accent = colorFor(proveedor);
+  const seleccionados = items.filter((it) => checked[it.id]);
+  const total = seleccionados.reduce((sum, it) => {
+    const costo = parseFloat(it.costo) || 0;
+    const qty = qtys[it.id] || 0;
+    return sum + costo * qty;
+  }, 0);
+
+  function toggle(id) { setChecked((p) => ({ ...p, [id]: !p[id] })); }
+  function setQty(id, val) { setQtys((p) => ({ ...p, [id]: Math.max(1, val) })); }
+  function setStock(id, val) { setStocks((p) => ({ ...p, [id]: val })); }
+
+  function handleGenerar() {
+    if (!numero.trim()) return;
+    const withQty = seleccionados.map((it) => ({ ...it, cantidad: qtys[it.id], stockActual: stocks[it.id] }));
+    onGenerar(proveedor, withQty, numero.trim());
+    setNumero("");
+  }
+
+  return (
+    <Card style={{ borderLeft: `6px solid ${accent}`, padding: 0, overflow: "hidden", height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ background: accent + "18", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontWeight: 800, color: accent, fontSize: 14 }}>● {proveedorLabel(proveedor, proveedores)}</div>
+        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{items.length} art.</div>
+      </div>
+      <div style={{ flex: 1 }}>
+        {items.map((it) => (
+          <div key={it.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 16px", borderTop: "1px solid #f1f5f9" }}>
+            <input type="checkbox" checked={!!checked[it.id]} onChange={() => toggle(it.id)} style={{ width: 18, height: 18, marginTop: 3 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{it.nombre}</div>
+              <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                código {it.codigo || "—"} · N° fábrica {it.nrofabrica || "—"}{it.costo ? ` · costo ${formatCosto(it.costo)}` : ""}
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
+                desc. {[it.descB, it.descS, it.descT, it.descU].filter((v) => v).join(" / ") || "—"}
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: "#0f172a" }}>{formatCosto(it.costoSinIva) || "—"}</span>
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>sin IVA</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                  <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>STOCK</label>
+                  <input type="number" min="0" value={stocks[it.id] ?? ""} placeholder="0"
+                    onChange={(e) => setStock(it.id, e.target.value)}
+                    style={{ width: 50, border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 6px", fontSize: 12, textAlign: "center" }} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                  <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>A PEDIR</label>
+                  <input type="number" min="1" value={qtys[it.id]} onChange={(e) => setQty(it.id, Number(e.target.value))}
+                    style={{ width: 50, border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 6px", fontSize: 12, textAlign: "center" }} />
+                </div>
+                <button onClick={() => onDelete(it.id)} title="Eliminar" style={{
+                  border: "none", background: "none", color: "#f43f5e", cursor: "pointer", fontSize: 15, padding: 4, alignSelf: "flex-end"
+                }}>🗑️</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: "10px 16px", background: "#f8fafc", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>Total</span>
+        <span className="mono" style={{ fontWeight: 800, fontSize: 15, color: accent }}>{formatCosto(total)}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 14, background: "#f8fafc" }}>
+        <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="N° de pedido"
+          className="mono" style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 12px", fontSize: 14 }} />
+        <button onClick={handleGenerar} disabled={busy || !numero.trim() || seleccionados.length === 0}
+          style={{ background: accent, color: "white", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: (!numero.trim() || seleccionados.length === 0) ? 0.5 : 1 }}>
+          Generar pedido ({seleccionados.length})
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function OrderRow({ order, onClick, done, proveedores }) {
+  const accent = colorFor(order.proveedor);
+  const count = Object.keys(order.items || {}).length;
+  return (
+    <button onClick={onClick} style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+      background: "white", border: "none", borderLeft: `5px solid ${accent}`, borderRadius: 12,
+      padding: "12px 16px", cursor: "pointer", textAlign: "left", boxShadow: "0 1px 3px rgba(0,0,0,.06)"
+    }}>
+      <div>
+        <span className="mono" style={{ fontWeight: 800 }}>{order.numero || "(sin número)"}</span>
+        {done && <span style={{ marginLeft: 8, fontSize: 12, color: "#10b981", fontWeight: 700 }}>✓ completado</span>}
+        <div style={{ fontSize: 12, color: "#64748b" }}>{proveedorLabel(order.proveedor, proveedores)} · {count} artículo(s)</div>
+      </div>
+      <div style={{ fontSize: 12, color: "#94a3b8" }}>{new Date(order.updatedAt).toLocaleDateString("es-AR")}</div>
+    </button>
+  );
+}
+
+function exportOrderToExcel(order, proveedores) {
+  const itemsList = Object.entries(order.items || {});
+  const rows = [["Código", "N° de fábrica", "Nombre", "Stock actual", "Cantidad a pedir", "Costo", "Descuentos", "Costo sin IVA", "Subtotal (sin IVA)"]];
+  itemsList.forEach(([, it]) => {
+    const costo = parseFloat(it.e) || 0;
+    const costoSinIva = parseFloat(it.costoSinIva) || 0;
+    const descuentos = [it.descB, it.descS, it.descT, it.descU].filter((v) => v).join(" / ");
+    rows.push([it.a || "", it.c || "", it.d || it.b || "", it.stockActual || "", it.cantidad, costo, descuentos, costoSinIva, costoSinIva * it.cantidad]);
+  });
+  const totalMonto = itemsList.reduce((s, [, it]) => s + (parseFloat(it.costoSinIva) || 0) * it.cantidad, 0);
+  rows.push([]);
+  rows.push(["", "", "", "", "", "", "", "TOTAL", totalMonto]);
+  const wsData = [
+    [`Pedido N° ${order.numero || ""}`],
+    [`Proveedor: ${proveedorLabel(order.proveedor, proveedores)}`],
+    [],
+    ...rows,
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Pedido");
+  XLSX.writeFile(wb, `Pedido_${order.numero || order.id}.xlsx`);
+}
+
+function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemove, onSave, onSaveExit, onFinalize, onDelete, busy }) {
+  const [search, setSearch] = useState("");
+  const accent = colorFor(order.proveedor);
+  const filteredRows = useMemo(() => {
+    if (!catalog) return [];
+    if (!search.trim()) return [];
+    const q = search.toLowerCase();
+    return catalog.rows.filter((r) => ["a", "b", "c", "d"].some((k) => (r[k] || "").toLowerCase().includes(q))).slice(0, 30);
+  }, [catalog, search]);
+  const itemsList = Object.entries(order.items || {});
+  const totalUnidades = itemsList.reduce((s, [, it]) => s + it.cantidad, 0);
+  const totalMonto = itemsList.reduce((s, [, it]) => s + (parseFloat(it.e) || 0) * it.cantidad, 0);
+
+  function handleDelete() {
+    if (window.confirm("¿Eliminar este pedido por completo? Esta acción no se puede deshacer.")) {
+      onDelete();
+    }
+  }
+
+  return (
+    <div style={{ paddingBottom: 220 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "#4f46e5", fontWeight: 700, fontSize: 14 }}>← Volver</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => exportOrderToExcel(order, proveedores)} style={{ ...ghostBtn }}>⬇ Exportar a Excel</button>
+          <button onClick={handleDelete} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 10, padding: "10px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+            🗑️ Eliminar pedido
+          </button>
+        </div>
+      </div>
+
+      <Card style={{ borderTop: `4px solid ${accent}`, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div>
+            <label style={labelStyle}>N° de pedido</label>
+            <div className="mono" style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>{order.numero || "—"}</div>
+          </div>
+          <div>
+            <label style={labelStyle}>Proveedor</label>
+            <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4, color: accent }}>{proveedorLabel(order.proveedor, proveedores)}</div>
+          </div>
+        </div>
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#475569", marginBottom: 10 }}>+ AGREGAR MÁS ARTÍCULOS</div>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="🔍 Buscar artículo para agregar…"
+          style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", fontSize: 14, marginBottom: 8 }} />
+        {filteredRows.map((row) => (
+          <div key={row._rowId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, fontSize: 14 }}>{displayName(row)}</div>
+            <button onClick={() => onAdd(row)} style={{ width: 30, height: 30, borderRadius: "50%", background: "#f59e0b", color: "white", border: "none", cursor: "pointer" }}>+</button>
+          </div>
+        ))}
+      </Card>
+
+      <div style={{ fontWeight: 800, fontSize: 13, color: "#475569", marginBottom: 10 }}>ARTÍCULOS ({itemsList.length})</div>
+      <Card style={{ padding: 0, marginBottom: 20 }}>
+        {itemsList.length === 0 && <div style={{ padding: 16, color: "#94a3b8", textAlign: "center" }}>Sin artículos todavía</div>}
+        {itemsList.map(([key, it]) => (
+          <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderTop: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{it.d || it.b || it.a}</div>
+              <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                código {it.a || "—"} · N° fábrica {it.c || "—"}{it.e ? ` · costo ${formatCosto(it.e)}` : ""}
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
+                desc. {[it.descB, it.descS, it.descT, it.descU].filter((v) => v).join(" / ") || "—"}
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: "#0f172a" }}>{formatCosto(it.costoSinIva) || "—"}</span>
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>sin IVA</span>
+              </div>
+              {(it.stockActual !== undefined && it.stockActual !== "") && (
+                <div style={{ fontSize: 10, color: "#94a3b8" }}>Stock actual: <b className="mono">{it.stockActual}</b></div>
+              )}
+            </div>
+            <button onClick={() => onQty(key, -1)} style={stepperBtn}>−</button>
+            <span className="mono" style={{ width: 24, textAlign: "center", fontWeight: 700 }}>{it.cantidad}</span>
+            <button onClick={() => onQty(key, 1)} style={stepperBtn}>+</button>
+            <button onClick={() => onRemove(key)} style={{ border: "none", background: "none", color: "#f43f5e", cursor: "pointer", fontSize: 16 }}>✕</button>
+          </div>
+        ))}
+      </Card>
+
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "white", borderTop: "1px solid #e2e8f0", padding: "10px 14px", boxShadow: "0 -4px 16px rgba(0,0,0,.06)" }}>
+        <div className="order-bottom-bar" style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div style={{ fontSize: 13, color: "#64748b" }}>
+            <b className="mono">{totalUnidades}</b> unidades · <b className="mono" style={{ color: accent }}>{formatCosto(totalMonto)}</b>
+          </div>
+          <div className="order-bottom-actions" style={{ display: "flex", gap: 8 }}>
+            <button onClick={onSave} disabled={busy} style={{ ...ghostBtn }}>Guardar</button>
+            <button onClick={onSaveExit} disabled={busy} style={{ ...ghostBtn }}>Guardar y salir</button>
+            <button onClick={onFinalize} disabled={busy} style={{ background: "#10b981", color: "white", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
+              ✓ Finalizar pedido
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+const labelStyle = { fontSize: 11, fontWeight: 800, color: "#94a3b8", letterSpacing: 0.5 };
+const ghostBtn = { background: "white", border: "1px solid #e2e8f0", color: "#475569", borderRadius: 10, padding: "10px 14px", fontWeight: 600, cursor: "pointer", fontSize: 13 };
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
