@@ -29,16 +29,45 @@
   }
   .pop-anim { animation: pop .32s ease; }
 
+  .mf-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .mf-actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+  }
+  .order-bottom-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .order-bottom-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .order-bottom-actions button { width: 100%; }
+
+  @media (min-width: 641px) {
+    .mf-card { flex-direction: row; align-items: center; gap: 14px; }
+    .mf-actions-row { width: auto; justify-content: flex-start; gap: 14px; }
+    .order-bottom-bar { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+    .order-bottom-actions { flex-direction: row; gap: 8px; }
+    .order-bottom-actions button { width: auto; }
+  }
+
   @media (max-width: 640px) {
     body { font-size: 15px; }
     .header-title { font-size: 20px !important; }
     .tab-bar { gap: 6px !important; }
     .tab-label { font-size: 11px !important; }
-    .mf-card { flex-direction: column !important; align-items: stretch !important; }
-    .mf-actions-row { justify-content: space-between !important; width: 100% !important; margin-top: 10px; }
-    .order-bottom-bar { flex-direction: column !important; align-items: stretch !important; gap: 8px !important; }
-    .order-bottom-actions { display: flex !important; flex-direction: column !important; gap: 8px !important; }
-    .order-bottom-actions button { width: 100% !important; }
   }
 </style>
 </head>
@@ -549,7 +578,7 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
           const qty = qtyDraft[row._rowId] || 1;
           const accent = colorFor(row.aa);
           return (
-            <Card key={row._rowId} className="mf-card" style={{ borderLeft: `5px solid ${accent}`, display: "flex", alignItems: "center", gap: 14, padding: 14 }}>
+            <Card key={row._rowId} className="mf-card" style={{ borderLeft: `5px solid ${accent}`, padding: 14 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{displayName(row)}</div>
                 <div className="mono" style={{ fontSize: 12, color: "#94a3b8" }}>
@@ -564,7 +593,7 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
                 </div>
                 {row.aa && <div style={{ fontSize: 12, color: accent, fontWeight: 700, marginTop: 2 }}>● proveedor {proveedorLabel(row.aa, proveedores)}</div>}
               </div>
-              <div className="mf-actions-row" style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div className="mf-actions-row">
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                   <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>STOCK ACTUAL</label>
                   <input type="number" min="0" value={stockDraft[row._rowId] ?? ""} placeholder="0"
@@ -1073,11 +1102,11 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
       </Card>
 
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "white", borderTop: "1px solid #e2e8f0", padding: "10px 14px", boxShadow: "0 -4px 16px rgba(0,0,0,.06)" }}>
-        <div className="order-bottom-bar" style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div className="order-bottom-bar" style={{ maxWidth: 900, margin: "0 auto" }}>
           <div style={{ fontSize: 13, color: "#64748b" }}>
             <b className="mono">{totalUnidades}</b> unidades · <b className="mono" style={{ color: accent }}>{formatCosto(totalMonto)}</b>
           </div>
-          <div className="order-bottom-actions" style={{ display: "flex", gap: 8 }}>
+          <div className="order-bottom-actions">
             <button onClick={onSave} disabled={busy} style={{ ...ghostBtn }}>Guardar</button>
             <button onClick={onSaveExit} disabled={busy} style={{ ...ghostBtn }}>Guardar y salir</button>
             <button onClick={onFinalize} disabled={busy} style={{ background: "#10b981", color: "white", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
