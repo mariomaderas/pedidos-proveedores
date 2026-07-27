@@ -144,17 +144,24 @@ function formatCosto(val) {
   if (isNaN(n)) return "";
   return "$ " + n.toLocaleString("es-AR", { maximumFractionDigits: 2 });
 }
+function estadoInfo(estado) {
+  if (estado === "recibido") return { label: "Recibido", emoji: "📦", color: "#10b981" };
+  if (estado === "completado") return { label: "Enviado · esperando entrega", emoji: "🚚", color: "#0ea5e9" };
+  return { label: "Borrador", emoji: "✏️", color: "#f59e0b" };
+}
 function proveedorLabel(code, proveedores) {
   const name = proveedores && proveedores[String(code)];
   return name ? `${code} - ${name}` : String(code || "—");
 }
 
 function App() {
-  const [tab, setTab] = useState("marcar"); // marcar | compras | sugerencias
+  const [tab, setTab] = useState("marcar"); // marcar | compras | sugerencias | reporte
+  const [lastVisitCompras, setLastVisitCompras] = useState(() => localStorage.getItem("ultimaVisitaCompras") || new Date(0).toISOString());
   const [view, setView] = useState("dashboard"); // dashboard | order (dentro de compras)
   const [catalog, setCatalog] = useState(null);
   const [proveedores, setProveedores] = useState({});
   const [sugerencias, setSugerencias] = useState([]);
+  const [reporte, setReporte] = useState([]);
   const [faltantes, setFaltantes] = useState([]);
   const [orders, setOrders] = useState([]);
   const [currentOrder, setCurrentOrder] = useState(null);
@@ -189,6 +196,10 @@ function App() {
     return () => clearInterval(interval);
   }, [tab, view]);
 
+  useEffect(() => {
+    if (tab === "reporte") refreshReporte();
+  }, [tab]);
+
   async function refreshAll() {
     setLoading(true);
     try {
@@ -209,6 +220,10 @@ function App() {
 
   async function refreshSugerencias() {
     try { setSugerencias(await apiGet("sugerencias")); } catch (e) { showToast(e.message); }
+  }
+
+  async function refreshReporte() {
+    try { setReporte(await apiGet("reporte")); } catch (e) { showToast(e.message); }
   }
 
   async function refreshFaltantes() {
@@ -295,6 +310,19 @@ function App() {
     });
     return groups;
   }, [faltantes]);
+
+  const newFaltantesCount = useMemo(() => {
+    const cutoff = new Date(lastVisitCompras).getTime();
+    return faltantes.filter((f) => new Date(f.createdAt).getTime() > cutoff).length;
+  }, [faltantes, lastVisitCompras]);
+
+  function goToCompras() {
+    setTab("compras");
+    setView("dashboard");
+    const now = new Date().toISOString();
+    localStorage.setItem("ultimaVisitaCompras", now);
+    setLastVisitCompras(now);
+  }
 
   async function addSugerencia(texto, imagenBase64, link) {
     setBusy(true);
@@ -406,6 +434,7 @@ function App() {
   async function persistOrder(order, opts = {}) {
     const toSave = { ...order, updatedAt: nowIso() };
     if (opts.finalize) toSave.estado = "completado";
+    if (opts.estado) toSave.estado = opts.estado;
     setBusy(true);
     try {
       await apiPost({ action: "saveOrder", order: toSave });
@@ -479,14 +508,15 @@ function App() {
           <div style={{ color: "rgba(255,255,255,.75)", fontSize: 12, fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>PEDIDOS A PROVEEDORES</div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
             <h1 className="header-title" style={{ color: "white", margin: 0, fontSize: 26, fontWeight: 800 }}>
-              {view === "order" ? "Detalle del pedido" : tab === "marcar" ? "Marcar faltante" : tab === "compras" ? "Panel de compras" : "Sugerencias de clientes"}
+              {view === "order" ? "Detalle del pedido" : tab === "marcar" ? "Marcar faltante" : tab === "compras" ? "Panel de compras" : tab === "sugerencias" ? "Sugerencias de clientes" : "Reporte de faltantes"}
             </h1>
             <button onClick={refreshAll} disabled={busy} style={pillBtn("rgba(255,255,255,.18)", "white")}>↻ actualizar</button>
           </div>
-          <div className="tab-bar" style={{ display: "flex", gap: 8, marginTop: 18 }}>
+          <div className="tab-bar" style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
             <TabButton active={view !== "order" && tab === "marcar"} onClick={() => { setTab("marcar"); setView("dashboard"); }} emoji="📋" label="Marcar faltante" />
-            <TabButton active={view !== "order" && tab === "compras"} onClick={() => { setTab("compras"); setView("dashboard"); }} emoji="🛒" label="Panel de compras" />
+            <TabButton active={view !== "order" && tab === "compras"} onClick={goToCompras} emoji="🛒" label="Panel de compras" badge={newFaltantesCount} />
             <TabButton active={view !== "order" && tab === "sugerencias"} onClick={() => { setTab("sugerencias"); setView("dashboard"); }} emoji="💡" label="Sugerencias" />
+            <TabButton active={view !== "order" && tab === "reporte"} onClick={() => { setTab("reporte"); setView("dashboard"); }} emoji="📊" label="Reporte" />
             {currentOrder && <TabButton active={view === "order"} onClick={() => setView("order")} emoji="🧾" label={`Pedido ${currentOrder.numero || ""}`} />}
           </div>
         </div>
@@ -501,6 +531,7 @@ function App() {
             onSave={() => persistOrder(currentOrder).then(() => showToast("Guardado"))}
             onSaveExit={() => persistOrder(currentOrder).then(() => { showToast("Guardado"); setView("dashboard"); })}
             onFinalize={() => persistOrder(currentOrder, { finalize: true }).then(() => { showToast("Pedido finalizado"); setView("dashboard"); })}
+            onMarkReceived={() => persistOrder(currentOrder, { estado: "recibido" }).then(() => showToast("Marcado como recibido"))}
             onDelete={() => deleteOrder(currentOrder)}
             busy={busy}
           />
@@ -517,8 +548,10 @@ function App() {
             onGenerar={generarPedido} onOpenOrder={openOrder} busy={busy}
             onDeleteFaltante={deleteFaltante}
           />
-        ) : (
+        ) : tab === "sugerencias" ? (
           <Sugerencias sugerencias={sugerencias} onAdd={addSugerencia} onUpdate={updateSugerencia} onDelete={deleteSugerencia} busy={busy} />
+        ) : (
+          <Reporte reporte={reporte} proveedores={proveedores} />
         )}
       </div>
     </div>
@@ -534,16 +567,24 @@ function Card({ children, style, className }) {
 function pillBtn(bg, color) {
   return { background: bg, color, border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" };
 }
-function TabButton({ active, onClick, emoji, label }) {
+function TabButton({ active, onClick, emoji, label, badge }) {
   return (
     <button onClick={onClick} style={{
       flex: 1, padding: "10px 8px", borderRadius: 10, border: "none", cursor: "pointer",
       background: active ? "white" : "rgba(255,255,255,.15)",
       color: active ? "#4f46e5" : "white", fontWeight: 700, fontSize: 14,
       display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-      transition: "all .15s", minWidth: 0,
+      transition: "all .15s", minWidth: 0, position: "relative",
     }}>
       <span style={{ fontSize: 16 }}>{emoji}</span><span className="tab-label" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      {!!badge && (
+        <span style={{
+          position: "absolute", top: -6, right: -6, background: "#f43f5e", color: "white",
+          fontSize: 11, fontWeight: 800, borderRadius: 999, minWidth: 18, height: 18,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+          boxShadow: "0 0 0 2px rgba(0,0,0,.15)"
+        }}>{badge > 99 ? "99+" : badge}</span>
+      )}
     </button>
   );
 }
@@ -848,6 +889,60 @@ function Sugerencias({ sugerencias, onAdd, onUpdate, onDelete, busy }) {
   );
 }
 
+function Reporte({ reporte, proveedores }) {
+  const max = reporte.length ? Math.max(...reporte.map((r) => r.veces)) : 1;
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#475569" }}>
+          📊 PRODUCTOS MÁS MARCADOS COMO FALTANTE
+        </div>
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+          Basado en todo el historial de faltantes marcados (aunque ya se hayan convertido en pedidos). Útil para decidir qué productos conviene tener siempre en stock.
+        </div>
+      </Card>
+
+      {reporte.length === 0 && (
+        <Card style={{ textAlign: "center", color: "#94a3b8" }}>Todavía no hay suficiente historial para armar el reporte.</Card>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {reporte.map((r, i) => {
+          const accent = colorFor(r.proveedor);
+          const pct = Math.max(6, Math.round((r.veces / max) * 100));
+          return (
+            <Card key={r.codigo} style={{ padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: "50%", background: i < 3 ? "#f59e0b" : "#e2e8f0",
+                  color: i < 3 ? "white" : "#64748b", display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 800, fontSize: 13, flexShrink: 0
+                }}>
+                  {i + 1}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{r.nombre}</div>
+                  <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                    código {r.codigo} · N° fábrica {r.nrofabrica || "—"} · {proveedorLabel(r.proveedor, proveedores)}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: accent }}>{r.veces}×</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8" }}>{r.cantidadTotal} unidades</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 8, background: "#f1f5f9", borderRadius: 999, height: 6, overflow: "hidden" }}>
+                <div style={{ width: `${pct}%`, background: accent, height: "100%", borderRadius: 999 }} />
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, onDeleteFaltante, busy, proveedores: proveedoresMap }) {
   const proveedores = Object.keys(faltantesByProveedor).sort((a, b) => {
     const na = parseFloat(a), nb = parseFloat(b);
@@ -856,6 +951,7 @@ function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, on
   });
   const borradores = orders.filter((o) => o.estado === "borrador");
   const completados = orders.filter((o) => o.estado === "completado");
+  const recibidos = orders.filter((o) => o.estado === "recibido");
   const nextNumero = nextConsecutiveNumero(orders);
 
   return (
@@ -881,12 +977,13 @@ function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, on
       <div style={{ fontSize: 13, fontWeight: 800, color: "#475569", letterSpacing: 0.5, marginBottom: 10 }}>
         📦 PEDIDOS GENERADOS
       </div>
-      {borradores.length === 0 && completados.length === 0 && (
+      {borradores.length === 0 && completados.length === 0 && recibidos.length === 0 && (
         <Card style={{ textAlign: "center", color: "#94a3b8" }}>Todavía no hay pedidos generados.</Card>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {borradores.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} proveedores={proveedoresMap} />)}
-        {completados.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} done proveedores={proveedoresMap} />)}
+        {completados.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} proveedores={proveedoresMap} />)}
+        {recibidos.map((o) => <OrderRow key={o.id} order={o} onClick={() => onOpenOrder(o)} proveedores={proveedoresMap} />)}
       </div>
     </div>
   );
@@ -974,9 +1071,10 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
   );
 }
 
-function OrderRow({ order, onClick, done, proveedores }) {
+function OrderRow({ order, onClick, proveedores }) {
   const accent = colorFor(order.proveedor);
   const count = Object.keys(order.items || {}).length;
+  const info = estadoInfo(order.estado);
   return (
     <button onClick={onClick} style={{
       display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
@@ -985,8 +1083,10 @@ function OrderRow({ order, onClick, done, proveedores }) {
     }}>
       <div>
         <span className="mono" style={{ fontWeight: 800 }}>{order.numero || "(sin número)"}</span>
-        {done && <span style={{ marginLeft: 8, fontSize: 12, color: "#10b981", fontWeight: 700 }}>✓ completado</span>}
-        <div style={{ fontSize: 12, color: "#64748b" }}>{proveedorLabel(order.proveedor, proveedores)} · {count} artículo(s)</div>
+        <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: info.color, background: info.color + "18", padding: "2px 8px", borderRadius: 999 }}>
+          {info.emoji} {info.label}
+        </span>
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{proveedorLabel(order.proveedor, proveedores)} · {count} artículo(s)</div>
       </div>
       <div style={{ fontSize: 12, color: "#94a3b8" }}>{new Date(order.updatedAt).toLocaleDateString("es-AR")}</div>
     </button>
@@ -1017,7 +1117,7 @@ function exportOrderToExcel(order, proveedores) {
   XLSX.writeFile(wb, `Pedido_${order.numero || order.id}.xlsx`);
 }
 
-function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemove, onSave, onSaveExit, onFinalize, onDelete, busy }) {
+function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemove, onSave, onSaveExit, onFinalize, onMarkReceived, onDelete, busy }) {
   const [search, setSearch] = useState("");
   const accent = colorFor(order.proveedor);
   const filteredRows = useMemo(() => {
@@ -1058,6 +1158,10 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
             <label style={labelStyle}>Proveedor</label>
             <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4, color: accent }}>{proveedorLabel(order.proveedor, proveedores)}</div>
           </div>
+        </div>
+        <div style={{ marginTop: 12, display: "inline-flex", alignItems: "center", gap: 6, background: estadoInfo(order.estado).color + "18", padding: "4px 10px", borderRadius: 999 }}>
+          <span>{estadoInfo(order.estado).emoji}</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: estadoInfo(order.estado).color }}>{estadoInfo(order.estado).label}</span>
         </div>
       </Card>
 
@@ -1110,9 +1214,19 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
           <div className="order-bottom-actions">
             <button onClick={onSave} disabled={busy} style={{ ...ghostBtn }}>Guardar</button>
             <button onClick={onSaveExit} disabled={busy} style={{ ...ghostBtn }}>Guardar y salir</button>
-            <button onClick={onFinalize} disabled={busy} style={{ background: "#10b981", color: "white", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
-              ✓ Finalizar pedido
-            </button>
+            {order.estado === "borrador" && (
+              <button onClick={onFinalize} disabled={busy} style={{ background: "#0ea5e9", color: "white", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
+                🚚 Enviar pedido
+              </button>
+            )}
+            {order.estado === "completado" && (
+              <button onClick={onMarkReceived} disabled={busy} style={{ background: "#10b981", color: "white", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
+                📦 Marcar como recibido
+              </button>
+            )}
+            {order.estado === "recibido" && (
+              <span style={{ fontSize: 13, color: "#10b981", fontWeight: 700, alignSelf: "center" }}>✓ Pedido recibido</span>
+            )}
           </div>
         </div>
       </div>
