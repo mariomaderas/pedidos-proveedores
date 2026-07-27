@@ -103,6 +103,31 @@ function newId() {
 }
 function nowIso() { return new Date().toISOString(); }
 
+const VENDEDOR_SESSION_MS = 30 * 60 * 1000; // 30 minutos
+function getVendedorSesion() {
+  try {
+    const raw = localStorage.getItem("vendedorSesion");
+    if (!raw) return null;
+    const { nombre, ts } = JSON.parse(raw);
+    if (!nombre || Date.now() - ts > VENDEDOR_SESSION_MS) return null;
+    return nombre;
+  } catch (e) {
+    return null;
+  }
+}
+function setVendedorSesion(nombre) {
+  localStorage.setItem("vendedorSesion", JSON.stringify({ nombre, ts: Date.now() }));
+}
+function touchVendedorSesion() {
+  const raw = localStorage.getItem("vendedorSesion");
+  if (!raw) return;
+  try {
+    const s = JSON.parse(raw);
+    s.ts = Date.now();
+    localStorage.setItem("vendedorSesion", JSON.stringify(s));
+  } catch (e) {}
+}
+
 function emptyOrder(numero, proveedor) {
   return {
     id: newId(), numero: numero || "", proveedor: proveedor || "",
@@ -167,6 +192,8 @@ function App() {
   const [currentOrder, setCurrentOrder] = useState(null);
   const [filters, setFilters] = useState({ producto: "", codigo: "", fabrica: "", proveedor: "" });
   const [qtyDraft, setQtyDraft] = useState({});
+  const [nombreModalOpen, setNombreModalOpen] = useState(false);
+  const [pendingMarkRow, setPendingMarkRow] = useState(null);
   const [stockDraft, setStockDraft] = useState({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -276,7 +303,7 @@ function App() {
     return results;
   }, [catalog, filters, proveedores]);
 
-  function markFaltante(row) {
+  function doMarkFaltante(row, vendedor) {
     const qty = qtyDraft[row._rowId] || 1;
     apiPost({
       action: "addFaltante",
@@ -285,12 +312,34 @@ function App() {
         proveedor: row.aa || "", costo: row.e || "",
         descB: row.descB || "", descS: row.descS || "", descT: row.descT || "", descU: row.descU || "",
         costoSinIva: row.costoSinIva || "", stockActual: stockDraft[row._rowId] ?? "",
-        cantidad: qty, createdAt: nowIso()
+        cantidad: qty, createdAt: nowIso(), vendedor: vendedor || ""
       },
     }).catch((e) => showToast("No se pudo guardar: " + e.message));
     showToast(`Agregado a faltantes: ${displayName(row)} (${qty})`);
     setQtyDraft((prev) => ({ ...prev, [row._rowId]: 1 }));
     setStockDraft((prev) => ({ ...prev, [row._rowId]: "" }));
+  }
+
+  function markFaltante(row) {
+    const vendedor = getVendedorSesion();
+    if (!vendedor) {
+      setPendingMarkRow(row);
+      setNombreModalOpen(true);
+      return;
+    }
+    touchVendedorSesion();
+    doMarkFaltante(row, vendedor);
+  }
+
+  function confirmarNombreVendedor(nombre) {
+    const limpio = nombre.trim();
+    if (!limpio) return;
+    setVendedorSesion(limpio);
+    setNombreModalOpen(false);
+    if (pendingMarkRow) {
+      doMarkFaltante(pendingMarkRow, limpio);
+      setPendingMarkRow(null);
+    }
   }
 
   function setStock(rowId, val) {
@@ -495,6 +544,9 @@ function App() {
 
   return (
     <div style={{ minHeight: "100vh" }}>
+      {nombreModalOpen && (
+        <NombreVendedorModal onConfirm={confirmarNombreVendedor} onCancel={() => { setNombreModalOpen(false); setPendingMarkRow(null); }} />
+      )}
       {toast && (
         <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, maxWidth: "90vw" }}>
           <div style={{ background: "#1e293b", color: "white", fontSize: 14, padding: "10px 18px", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.25)", wordBreak: "break-word" }}>
@@ -553,6 +605,39 @@ function App() {
         ) : (
           <Reporte reporte={reporte} proveedores={proveedores} />
         )}
+      </div>
+    </div>
+  );
+}
+
+function NombreVendedorModal({ onConfirm, onCancel }) {
+  const [nombre, setNombre] = useState("");
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20
+    }}>
+      <div style={{ background: "white", borderRadius: 16, padding: 24, maxWidth: 360, width: "100%", boxShadow: "0 20px 50px rgba(0,0,0,.3)" }}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>👋</div>
+        <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>¿Quién sos?</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14 }}>
+          Escribí tu nombre para identificar quién marca cada faltante. No te lo va a volver a pedir por 30 minutos.
+        </div>
+        <input
+          autoFocus value={nombre} onChange={(e) => setNombre(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") onConfirm(nombre); }}
+          placeholder="Tu nombre"
+          style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", fontSize: 15, marginBottom: 14, boxSizing: "border-box" }}
+        />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onCancel} style={{ flex: 1, background: "#f1f5f9", color: "#475569", border: "none", borderRadius: 10, padding: "10px 0", fontWeight: 700, cursor: "pointer" }}>
+            Cancelar
+          </button>
+          <button onClick={() => onConfirm(nombre)} disabled={!nombre.trim()}
+            style={{ flex: 2, background: "#6366f1", color: "white", border: "none", borderRadius: 10, padding: "10px 0", fontWeight: 700, cursor: "pointer", opacity: nombre.trim() ? 1 : 0.5 }}>
+            Continuar
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1025,6 +1110,9 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
             <input type="checkbox" checked={!!checked[it.id]} onChange={() => toggle(it.id)} style={{ width: 18, height: 18, marginTop: 3 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>{it.nombre}</div>
+              {it.vendedor && (
+                <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>👤 {it.vendedor}</div>
+              )}
               <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
                 código {it.codigo || "—"} · N° fábrica {it.nrofabrica || "—"}{it.costo ? ` · costo ${formatCosto(it.costo)}` : ""}
               </div>
