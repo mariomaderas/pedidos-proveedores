@@ -709,7 +709,9 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{displayName(row)}</div>
                 <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: "#334155" }}>
-                  código {row.a || "—"} · N° fábrica {row.c || "—"}{row.e ? ` · costo ${formatCosto(row.e)}` : ""}
+                  <div>código {row.a || "—"}</div>
+                  <div>N° fábrica {row.c || "—"}</div>
+                  {row.e && <div>costo {formatCosto(row.e)}</div>}
                 </div>
                 <div className="mono" style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                   desc. {[row.descB, row.descS, row.descT, row.descU].filter((v) => v).join(" / ") || "—"}
@@ -1009,7 +1011,9 @@ function Reporte({ reporte, proveedores }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{r.nombre}</div>
                   <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
-                    código {r.codigo} · N° fábrica {r.nrofabrica || "—"} · {proveedorLabel(r.proveedor, proveedores)}
+                    <div>código {r.codigo}</div>
+                    <div>N° fábrica {r.nrofabrica || "—"}</div>
+                    <div>{proveedorLabel(r.proveedor, proveedores)}</div>
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -1114,7 +1118,9 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
                 <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>👤 {it.vendedor}</div>
               )}
               <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
-                código {it.codigo || "—"} · N° fábrica {it.nrofabrica || "—"}{it.costo ? ` · costo ${formatCosto(it.costo)}` : ""}
+                <div>código {it.codigo || "—"}</div>
+                <div>N° fábrica {it.nrofabrica || "—"}</div>
+                {it.costo && <div>costo {formatCosto(it.costo)}</div>}
               </div>
               <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
                 desc. {[it.descB, it.descS, it.descT, it.descU].filter((v) => v).join(" / ") || "—"}
@@ -1273,7 +1279,9 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 14 }}>{it.d || it.b || it.a}</div>
               <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
-                código {it.a || "—"} · N° fábrica {it.c || "—"}{it.e ? ` · costo ${formatCosto(it.e)}` : ""}
+                <div>código {it.a || "—"}</div>
+                <div>N° fábrica {it.c || "—"}</div>
+                {it.e && <div>costo {formatCosto(it.e)}</div>}
               </div>
               <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
                 desc. {[it.descB, it.descS, it.descT, it.descU].filter((v) => v).join(" / ") || "—"}
