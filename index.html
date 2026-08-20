@@ -708,7 +708,7 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
             <Card key={row._rowId} className="mf-card" style={{ borderLeft: `5px solid ${accent}`, padding: 14 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{displayName(row)}</div>
-                <div className="mono" style={{ fontSize: 12, color: "#94a3b8" }}>
+                <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: "#334155" }}>
                   código {row.a || "—"} · N° fábrica {row.c || "—"}{row.e ? ` · costo ${formatCosto(row.e)}` : ""}
                 </div>
                 <div className="mono" style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
@@ -1008,7 +1008,7 @@ function Reporte({ reporte, proveedores }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{r.nombre}</div>
-                  <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
                     código {r.codigo} · N° fábrica {r.nrofabrica || "—"} · {proveedorLabel(r.proveedor, proveedores)}
                   </div>
                 </div>
@@ -1113,7 +1113,7 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
               {it.vendedor && (
                 <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>👤 {it.vendedor}</div>
               )}
-              <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+              <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
                 código {it.codigo || "—"} · N° fábrica {it.nrofabrica || "—"}{it.costo ? ` · costo ${formatCosto(it.costo)}` : ""}
               </div>
               <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
@@ -1272,7 +1272,7 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
           <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderTop: "1px solid #f1f5f9" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 14 }}>{it.d || it.b || it.a}</div>
-              <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+              <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
                 código {it.a || "—"} · N° fábrica {it.c || "—"}{it.e ? ` · costo ${formatCosto(it.e)}` : ""}
               </div>
               <div className="mono" style={{ fontSize: 10, color: "#94a3b8" }}>
