@@ -733,7 +733,9 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
                   <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>A PEDIR</label>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <button onClick={() => setQty(row._rowId, qty - 1)} style={stepperBtn}>−</button>
-                    <span className="mono" style={{ width: 26, textAlign: "center", fontWeight: 700 }}>{qty}</span>
+                    <input type="number" min="1" value={qty}
+                      onChange={(e) => setQty(row._rowId, Math.max(1, Number(e.target.value) || 1))}
+                      className="mono" style={{ width: 44, textAlign: "center", fontWeight: 700, border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 2px", fontSize: 13 }} />
                     <button onClick={() => setQty(row._rowId, qty + 1)} style={stepperBtn}>+</button>
                   </div>
                 </div>
@@ -1033,11 +1035,19 @@ function Reporte({ reporte, proveedores }) {
 }
 
 function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, onDeleteFaltante, busy, proveedores: proveedoresMap }) {
-  const proveedores = Object.keys(faltantesByProveedor).sort((a, b) => {
+  const [provFilter, setProvFilter] = useState("");
+  const proveedoresTodos = Object.keys(faltantesByProveedor).sort((a, b) => {
     const na = parseFloat(a), nb = parseFloat(b);
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
     return a.localeCompare(b);
   });
+  const q = provFilter.trim().toLowerCase();
+  const proveedores = q
+    ? proveedoresTodos.filter((prov) => {
+        const nombre = (proveedoresMap[String(prov)] || "").toLowerCase();
+        return prov.toLowerCase().includes(q) || nombre.includes(q);
+      })
+    : proveedoresTodos;
   const borradores = orders.filter((o) => o.estado === "borrador");
   const completados = orders.filter((o) => o.estado === "completado");
   const recibidos = orders.filter((o) => o.estado === "recibido");
@@ -1048,8 +1058,18 @@ function PanelCompras({ faltantesByProveedor, orders, onGenerar, onOpenOrder, on
       <div style={{ fontSize: 13, fontWeight: 800, color: "#475569", letterSpacing: 0.5, marginBottom: 10 }}>
         🧾 FALTANTES PENDIENTES POR PROVEEDOR
       </div>
-      {proveedores.length === 0 && (
+      {proveedoresTodos.length === 0 && (
         <Card style={{ textAlign: "center", color: "#94a3b8", marginBottom: 24 }}>No hay faltantes pendientes. 🎉</Card>
+      )}
+      {proveedoresTodos.length > 0 && (
+        <input
+          value={provFilter} onChange={(e) => setProvFilter(e.target.value)}
+          placeholder="🔍 Buscar proveedor por número o nombre…"
+          style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", fontSize: 14, marginBottom: 14, boxSizing: "border-box" }}
+        />
+      )}
+      {proveedoresTodos.length > 0 && proveedores.length === 0 && (
+        <Card style={{ textAlign: "center", color: "#94a3b8", marginBottom: 24 }}>Ningún proveedor con faltantes coincide con "{provFilter}"</Card>
       )}
       <div style={{ display: "flex", gap: 14, marginBottom: 28, overflowX: "auto", paddingBottom: 12 }}>
         {proveedores.map((prov) => (
@@ -1295,7 +1315,12 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
               )}
             </div>
             <button onClick={() => onQty(key, -1)} style={stepperBtn}>−</button>
-            <span className="mono" style={{ width: 24, textAlign: "center", fontWeight: 700 }}>{it.cantidad}</span>
+            <input type="number" min="1" value={it.cantidad}
+              onChange={(e) => {
+                const nuevo = Math.max(1, Number(e.target.value) || 1);
+                onQty(key, nuevo - it.cantidad);
+              }}
+              className="mono" style={{ width: 44, textAlign: "center", fontWeight: 700, border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 2px", fontSize: 13 }} />
             <button onClick={() => onQty(key, 1)} style={stepperBtn}>+</button>
             <button onClick={() => onRemove(key)} style={{ border: "none", background: "none", color: "#f43f5e", cursor: "pointer", fontSize: 16 }}>✕</button>
           </div>
