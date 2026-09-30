@@ -178,6 +178,19 @@ function proveedorLabel(code, proveedores) {
   const name = proveedores && proveedores[String(code)];
   return name ? `${code} - ${name}` : String(code || "—");
 }
+function cleanPhone(raw) {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return "";
+  digits = digits.replace(/^0/, ""); // saca el 0 de código de área
+  digits = digits.replace(/^(\d{2,4})15/, "$1"); // saca el 15 de celular viejo
+  if (!digits.startsWith("54")) digits = "549" + digits;
+  return digits;
+}
+function waLink(phone, message) {
+  const clean = cleanPhone(phone);
+  if (!clean) return "";
+  return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
+}
 
 function App() {
   const [tab, setTab] = useState("marcar"); // marcar | compras | sugerencias | reporte
@@ -195,6 +208,7 @@ function App() {
   const [nombreModalOpen, setNombreModalOpen] = useState(false);
   const [pendingMarkRow, setPendingMarkRow] = useState(null);
   const [stockDraft, setStockDraft] = useState({});
+  const [telefonoDraft, setTelefonoDraft] = useState({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
@@ -312,12 +326,14 @@ function App() {
         proveedor: row.aa || "", costo: row.e || "",
         descB: row.descB || "", descS: row.descS || "", descT: row.descT || "", descU: row.descU || "",
         costoSinIva: row.costoSinIva || "", stockActual: stockDraft[row._rowId] ?? "",
-        cantidad: qty, createdAt: nowIso(), vendedor: vendedor || ""
+        cantidad: qty, createdAt: nowIso(), vendedor: vendedor || "",
+        telefono: telefonoDraft[row._rowId] || ""
       },
     }).catch((e) => showToast("No se pudo guardar: " + e.message));
     showToast(`Agregado a faltantes: ${displayName(row)} (${qty})`);
     setQtyDraft((prev) => ({ ...prev, [row._rowId]: 1 }));
     setStockDraft((prev) => ({ ...prev, [row._rowId]: "" }));
+    setTelefonoDraft((prev) => ({ ...prev, [row._rowId]: "" }));
   }
 
   function markFaltante(row) {
@@ -344,6 +360,10 @@ function App() {
 
   function setStock(rowId, val) {
     setStockDraft((prev) => ({ ...prev, [rowId]: val }));
+  }
+
+  function setTelefono(rowId, val) {
+    setTelefonoDraft((prev) => ({ ...prev, [rowId]: val }));
   }
 
   function setQty(rowId, qty) {
@@ -444,7 +464,7 @@ function App() {
           a: it.codigo, c: it.nrofabrica || "", d: it.nombre, e: it.costo || "",
           descB: it.descB || "", descS: it.descS || "", descT: it.descT || "", descU: it.descU || "",
           costoSinIva: it.costoSinIva || "", stockActual: it.stockActual || "",
-          cantidad: it.cantidad
+          cantidad: it.cantidad, telefono: it.telefono || ""
         };
       });
       const order = emptyOrder(numero, proveedor);
@@ -592,6 +612,7 @@ function App() {
             catalog={catalog} filters={filters} setFilters={setFilters} proveedores={proveedores}
             filteredRows={filteredRows} qtyDraft={qtyDraft} setQty={setQty}
             stockDraft={stockDraft} setStock={setStock}
+            telefonoDraft={telefonoDraft} setTelefono={setTelefono}
             onMark={markFaltante} busy={busy}
           />
         ) : tab === "compras" ? (
@@ -674,7 +695,7 @@ function TabButton({ active, onClick, emoji, label, badge }) {
   );
 }
 
-function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, setQty, stockDraft, setStock, onMark, busy, proveedores }) {
+function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, setQty, stockDraft, setStock, telefonoDraft, setTelefono, onMark, busy, proveedores }) {
   const [popId, setPopId] = useState(null);
   if (!catalog) return <Card>No se pudo cargar el catálogo.</Card>;
 
@@ -721,6 +742,12 @@ function MarcarFaltante({ catalog, filters, setFilters, filteredRows, qtyDraft, 
                   <span style={{ fontSize: 11, color: "#94a3b8" }}>costo sin IVA</span>
                 </div>
                 {row.aa && <div style={{ fontSize: 12, color: accent, fontWeight: 700, marginTop: 2 }}>● proveedor {proveedorLabel(row.aa, proveedores)}</div>}
+                <div style={{ marginTop: 6 }}>
+                  <label style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>📞 TEL. DEL CLIENTE (opcional, para avisarle cuando llegue)</label>
+                  <input type="tel" value={telefonoDraft[row._rowId] ?? ""} placeholder="Ej: 343 4123456"
+                    onChange={(e) => setTelefono(row._rowId, e.target.value)}
+                    style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", fontSize: 13, marginTop: 3, boxSizing: "border-box" }} />
+                </div>
               </div>
               <div className="mf-actions-row">
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
@@ -1137,6 +1164,9 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
               {it.vendedor && (
                 <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>👤 {it.vendedor}</div>
               )}
+              {it.telefono && (
+                <div style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>📞 {it.telefono}</div>
+              )}
               <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: "#334155" }}>
                 <div>código {it.codigo || "—"}</div>
                 <div>N° fábrica {it.nrofabrica || "—"}</div>
@@ -1312,6 +1342,16 @@ function OrderScreen({ order, catalog, proveedores, onBack, onAdd, onQty, onRemo
               </div>
               {(it.stockActual !== undefined && it.stockActual !== "") && (
                 <div style={{ fontSize: 10, color: "#94a3b8" }}>Stock actual: <b className="mono">{it.stockActual}</b></div>
+              )}
+              {it.telefono && (
+                <div style={{ fontSize: 10, color: "#10b981", fontWeight: 700, marginTop: 2 }}>📞 {it.telefono}</div>
+              )}
+              {order.estado === "recibido" && it.telefono && (
+                <a href={waLink(it.telefono, `Hola! Te contactamos de Mario Maderas para avisarte que llegó el producto que habías consultado: ${it.d || it.b || it.a}. ¡Te esperamos para retirarlo!`)}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 6, background: "#25D366", color: "white", textDecoration: "none", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 999 }}>
+                  📲 Avisar por WhatsApp
+                </a>
               )}
             </div>
             <button onClick={() => onQty(key, -1)} style={stepperBtn}>−</button>
