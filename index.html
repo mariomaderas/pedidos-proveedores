@@ -169,6 +169,14 @@ function formatCosto(val) {
   if (isNaN(n)) return "";
   return "$ " + n.toLocaleString("es-AR", { maximumFractionDigits: 2 });
 }
+function formatFechaHora(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const fecha = d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+  const hora = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  return `${fecha} ${hora}`;
+}
 function estadoInfo(estado) {
   if (estado === "recibido") return { label: "Recibido", emoji: "📦", color: "#10b981" };
   if (estado === "completado") return { label: "Enviado · esperando entrega", emoji: "🚚", color: "#0ea5e9" };
@@ -1162,7 +1170,9 @@ function ProveedorGroup({ proveedor, items, onGenerar, onDelete, busy, nextNumer
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>{it.nombre}</div>
               {it.vendedor && (
-                <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>👤 {it.vendedor}</div>
+                <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>
+                  👤 {it.vendedor}{it.createdAt && <span style={{ color: "#94a3b8", fontWeight: 600 }}> · {formatFechaHora(it.createdAt)}</span>}
+                </div>
               )}
               {it.telefono && (
                 <div style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>📞 {it.telefono}</div>
