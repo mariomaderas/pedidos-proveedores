@@ -1036,7 +1036,7 @@ function Reporte({ reporte, proveedores }) {
           const accent = colorFor(r.proveedor);
           const pct = Math.max(6, Math.round((r.veces / max) * 100));
           return (
-            <Card key={r.codigo} style={{ padding: 14 }}>
+            <Card key={r.clave || r.codigo} style={{ padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{
                   width: 28, height: 28, borderRadius: "50%", background: i < 3 ? "#f59e0b" : "#e2e8f0",
